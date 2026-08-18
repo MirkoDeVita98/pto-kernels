@@ -75,7 +75,7 @@ build_and_test_aarch64_910B2_py3.12:
 # On-device unit tests using pip install pto-kernels #
 ###################################################
 test_pypi_x86_910B4:
-  image: quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.11
+  image: quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12
   tags:
     - docker_npu # Build and test on-device NPU (x86-64 / 910B4)
   before_script:
@@ -89,8 +89,8 @@ test_pypi_x86_910B4:
   when: manual
   allow_failure: true
 
-test_pypi_aarch64_910B2_py3.11:
-  image: quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.11
+test_pypi_aarch64_910B2_py3.12:
+  image: quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12
   stage: test_aarch64_910B2
   tags:
     - docker_npu_910B2 # Build and test on-device (aarch64 / 910B2)
