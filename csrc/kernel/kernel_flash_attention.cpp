@@ -14,11 +14,7 @@ full text of the License.
 // while pto-inst.hpp is parsed, so this include order is intentional.
 // clang-format off
 #include <pto/pto-inst.hpp>
-#if defined(PTO_NPU_ARCH_A5)
-#include <pto/npu/a5/custom/TSyncCVID.hpp>
-#else
 #include <pto/npu/a2a3/custom/TSyncCVID.hpp>
-#endif
 // clang-format on
 
 #include <pto/common/memory.hpp>
@@ -295,17 +291,27 @@ AICORE inline void apply_causal_diag_mask(TileDataS1 input_x, TileDataS1 triu,
   if (s1_index <= s0_index && s0_index < s1_index + TileDataS1::Cols) {
     const float base_phase = static_cast<float>(s0_index % TileDataS1::Cols);
     TCVT(triu, causal_e, RoundMode::CAST_ROUND);  // fp16 E=i-j -> fp32
-    kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+    pipe_barrier(PIPE_V);
+#endif
     TADDS(triu, triu, base_phase);  // base_phase + (i - j)
-    kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+    pipe_barrier(PIPE_V);
+#endif
     TMINS(triu, triu,
           0.0f);  // keep only the masked (negative) part; attended -> 0
-    kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+    pipe_barrier(PIPE_V);
+#endif
     TMULS(triu, triu,
           kCausalMaskNeg);  // masked lanes become a large negative value
-    kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+    pipe_barrier(PIPE_V);
+#endif
     TADD(input_x, input_x, triu);
-    kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+    pipe_barrier(PIPE_V);
+#endif
   }
 }
 
@@ -352,11 +358,15 @@ AICORE inline void softmax_opt_fa_init_impl(
   }
   // FA2.0 init mode
   TROWMAX(new_global_max, input_x, tmp_float);
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
   TROWEXPANDSUB(p_tile_f32, input_x, new_global_max);
   TMULS(p_tile_f32, p_tile_f32, scale);
   TEXP(p_tile_f32, p_tile_f32);
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
   TROWSUM(new_global_sum, p_tile_f32, tmp_float);
 
   TRESHAPE(p_tile_f32_1d, p_tile_f32);
@@ -430,17 +440,25 @@ AICORE inline void softmax_opt_fa_not_init_impl(
   // FA2.0 streaming mode (not first tile): update (global_max, global_sum) and
   // rescale old sums.
   TROWMAX(local_max, input_x, tmp_float);
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
   TRESHAPE(tmp_shw_local_max, local_max);
   TRESHAPE(tmp_shw_new_global_max, new_global_max);
   TMAX(tmp_shw_local_max, tmp_shw_local_max, tmp_shw_new_global_max);
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
   TRESHAPE(tmp_shw_exp_max, exp_max);
   TSUB(tmp_shw_exp_max, tmp_shw_new_global_max, tmp_shw_local_max);
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
 
   TMULS(tmp_shw_new_global_max, tmp_shw_local_max, 1.0f);  // just copy
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
   // The current tile must be normalized against the updated global max, not its
   // local max. Otherwise the PV numerator and global denominator disagree
   // whenever a previous tile owns the row max, which is mostly invisible for
@@ -456,12 +474,16 @@ AICORE inline void softmax_opt_fa_not_init_impl(
   TRESHAPE(p_tile_f32_1d, p_tile_f32);
   TRESHAPE(x_exp_1d, x_exp);
   TCVT(x_exp_1d, p_tile_f32_1d, RoundMode::CAST_ROUND);
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
   TRESHAPE(tmp_shw_new_global_sum, new_global_sum);
   TMUL(tmp_shw_new_global_sum, tmp_shw_exp_max, tmp_shw_new_global_sum);
   TROWSUM(local_sum, p_tile_f32, tmp_float);
   TRESHAPE(tmp_shw_local_sum, local_sum);
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
   TADD(tmp_shw_new_global_sum, tmp_shw_new_global_sum, tmp_shw_local_sum);
 }
 
@@ -1247,7 +1269,9 @@ AICORE inline void pto_macro_fa_gu(svTileData __out__ prev_sv_tile,
                                    svTileData __in__ est_sv_tile,
                                    reducedTileData __in__ exp_max) {
   TROWEXPANDMUL(prev_sv_tile, prev_sv_tile, exp_max);
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
   TADD(prev_sv_tile, prev_sv_tile, est_sv_tile);
 }
 
@@ -1257,9 +1281,13 @@ AICORE inline void pto_macro_fa_gu_last(svTileData __out__ prev_sv_tile,
                                         reducedTileData __in__ exp_max,
                                         reducedTileData __in__ new_global_sum) {
   TROWEXPANDMUL(prev_sv_tile, prev_sv_tile, exp_max);
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
   TADD(prev_sv_tile, prev_sv_tile, est_sv_tile);
-  kernel_utils::PipeBarrierVec();
+#if defined(__DAV_C220_VEC__)
+  pipe_barrier(PIPE_V);
+#endif
   TROWEXPANDDIV(prev_sv_tile, prev_sv_tile, new_global_sum);
 }
 
@@ -1520,7 +1548,7 @@ AICORE inline void runTFA(
 
   // Generate E[i][j] = i - j once (vec only, causal only). Row 0 is
   // [0,-1,-2,...] via a descending TCI; row i is row 0 + i. This is a one-time
-  // TCI + cast + Vec_S0-1 vector adds, amortized over the whole kernel — the
+  // scalar TCI + Vec_S0-1 vector adds, amortized over the whole kernel — the
   // hot path then just adds a scalar and clamps (no per-diagonal-tile scalar
   // loop).
   if constexpr (DAV_VEC && CAUSAL_MASK) {
@@ -1530,37 +1558,23 @@ AICORE inline void runTFA(
     const uint64_t e_scratch = (uint64_t)triu.data();
     using ERowF =
         Tile<TileType::Vec, float, 1, Tile_S1, BLayout::RowMajor, 1, Tile_S1>;
-    using ERowI32 =
-        Tile<TileType::Vec, int32_t, 1, Tile_S1, BLayout::RowMajor, 1, Tile_S1>;
     using EBlockF = Tile<TileType::Vec, float, Vec_S0, Tile_S1,
                          BLayout::RowMajor, Vec_S0, Tile_S1>;
-    // TCI is integer-only on A5, so generate the iota in int32 and cast to
-    // fp32 (exact: |values| <= Tile_S1). The 3-arg TCI overload selects the
-    // vectorized path (hw vci on A5; tmp is A2-only scratch, >= 768B for b32).
-    static_assert(Vec_S0 >= 3,
-                  "causal E init borrows triu rows 1 and Vec_S0-1");
-    ERowI32 e_row0_i32;
-    TASSIGN(e_row0_i32, e_scratch + static_cast<uint64_t>(Vec_S0 - 1) *
-                                        Tile_S1 * sizeof(float));
-    ERowF tci_tmp;
-    TASSIGN(tci_tmp, e_scratch + Tile_S1 * sizeof(float));
-    TCI<ERowI32, ERowF, int32_t, 1>(e_row0_i32, 0, tci_tmp);
-    kernel_utils::PipeBarrierVec();
     ERowF e_row0;
     TASSIGN(e_row0, e_scratch);
-    TCVT(e_row0, e_row0_i32, RoundMode::CAST_ROUND);  // e_row0[j] = 0 - j
-    kernel_utils::PipeBarrierVec();
+    TCI<ERowF, float, 1>(e_row0, 0.0f);  // e_row0[j] = 0 - j
+    pipe_barrier(PIPE_V);
     for (int i = 1; i < static_cast<int>(Vec_S0); ++i) {
       ERowF e_rowi;
       TASSIGN(e_rowi,
               e_scratch + static_cast<uint64_t>(i) * Tile_S1 * sizeof(float));
       TADDS(e_rowi, e_row0, static_cast<float>(i));  // e_rowi[j] = i - j
     }
-    kernel_utils::PipeBarrierVec();
+    pipe_barrier(PIPE_V);
     EBlockF e_block;
     TASSIGN(e_block, e_scratch);
     TCVT(causal_e, e_block, RoundMode::CAST_ROUND);  // fp32 E -> fp16 causal_e
-    kernel_utils::PipeBarrierVec();
+    pipe_barrier(PIPE_V);
   }
 
   // This core's id in [0, n_cores). The host launches n_cores = min(block_rows,
